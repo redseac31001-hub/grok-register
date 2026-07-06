@@ -316,6 +316,35 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
     return True
 
 
+def get_grok2api_remote_api_bases(base):
+    """生成 grok2api 管理 API 候选根路径。
+
+    参数:
+      - base str: 用户配置的 grok2api 远端地址
+
+    返回:
+      - list[str]: 依次尝试的管理 API 根路径
+    """
+    normalized = str(base or "").strip().rstrip("/")
+    if not normalized:
+        return []
+    lower = normalized.lower()
+    candidates = [normalized]
+    if lower.endswith("/admin/api"):
+        return candidates
+    if lower.endswith("/admin"):
+        candidates.append(f"{normalized}/api")
+    else:
+        candidates.append(f"{normalized}/admin/api")
+    seen = set()
+    unique = []
+    for item in candidates:
+        if item not in seen:
+            unique.append(item)
+            seen.add(item)
+    return unique
+
+
 def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
     token = _normalize_sso_token(raw_token)
     if not token:
@@ -331,24 +360,29 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
     query = {"app_key": app_key}
     pool_map = {"ssoBasic": "basic", "ssoSuper": "super"}
     remote_pool = pool_map.get(pool_name, "basic")
+    api_bases = get_grok2api_remote_api_bases(base)
+    add_errors = []
     # 优先使用 add 接口，避免全量覆盖远端池
-    try:
-        add_payload = {"tokens": [token], "pool": remote_pool, "tags": ["auto-register"]}
-        resp_add = http_post(
-            f"{base}/tokens/add",
-            headers=headers,
-            params=query,
-            json=add_payload,
-            timeout=30,
-            proxies={},
-        )
-        resp_add.raise_for_status()
-        if log_callback:
-            log_callback(f"[+] 已写入 grok2api 远端池: {pool_name} ({base}/tokens/add)")
-        return True
-    except Exception as add_exc:
-        if log_callback:
-            log_callback(f"[Debug] /tokens/add 写入失败，尝试 /tokens 全量模式: {add_exc}")
+    add_payload = {"tokens": [token], "pool": remote_pool, "tags": ["auto-register"]}
+    for api_base in api_bases:
+        endpoint = f"{api_base}/tokens/add"
+        try:
+            resp_add = http_post(
+                endpoint,
+                headers=headers,
+                params=query,
+                json=add_payload,
+                timeout=30,
+                proxies={},
+            )
+            resp_add.raise_for_status()
+            if log_callback:
+                log_callback(f"[+] 已写入 grok2api 远端池: {pool_name} ({endpoint})")
+            return True
+        except Exception as add_exc:
+            add_errors.append(f"{endpoint}: {add_exc}")
+    if log_callback:
+        log_callback(f"[Debug] /tokens/add 写入失败，尝试 /tokens 全量模式: {'; '.join(add_errors)}")
 
     # 兜底：旧版全量保存接口
     current = {}

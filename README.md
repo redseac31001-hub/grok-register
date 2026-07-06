@@ -93,7 +93,7 @@ cp config.example.json config.json
 | `grok2api_auto_add_local` | 是否写入本地 grok2api token 池 |
 | `grok2api_local_token_file` | 本地 grok2api token 文件路径 |
 | `grok2api_auto_add_remote` | 是否写入远端 grok2api |
-| `grok2api_remote_base` | 远端 grok2api 管理 API 地址 |
+| `grok2api_remote_base` | 远端 grok2api 地址，可填站点根地址或 `/admin/api` 管理 API 地址 |
 | `grok2api_remote_app_key` | 远端 grok2api app key |
 
 ### Cloudflare 临时邮箱 admin 模式
