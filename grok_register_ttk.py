@@ -3406,6 +3406,13 @@ class GrokRegisterGUI:
                     except Exception as file_exc:
                         self.log(f"[Debug] 保存账号文件失败: {file_exc}")
                     add_token_to_grok2api_pools(sso, email=email, log_callback=self.log)
+                    maybe_export_cpa_xai_after_success(
+                        email=email,
+                        password=profile.get("password", ""),
+                        sso=sso,
+                        log_callback=self.log,
+                        cancel_callback=self.should_stop,
+                    )
                     self.success_count += 1
                     retry_count_for_slot = 0
                     i += 1
