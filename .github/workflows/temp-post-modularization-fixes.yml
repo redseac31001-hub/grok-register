@@ -6,6 +6,7 @@ on:
       - fix/post-modularization-regressions
     paths:
       - tools/apply_post_modularization_fixes.py
+      - tools/repair_post_modularization_patcher.py
       - .github/workflows/temp-post-modularization-fixes.yml
   workflow_dispatch:
 
@@ -27,8 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install filelock
-      - name: Validate and apply fixes
+      - name: Repair, validate, and apply fixes
         run: |
+          python -m py_compile \
+            tools/repair_post_modularization_patcher.py \
+            tools/apply_post_modularization_fixes.py
+          python tools/repair_post_modularization_patcher.py
           python -m py_compile tools/apply_post_modularization_fixes.py
           python tools/apply_post_modularization_fixes.py
           python -m compileall -q .
@@ -50,7 +55,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f tools/apply_post_modularization_fixes.py .github/workflows/temp-post-modularization-fixes.yml
+          git rm -f \
+            tools/apply_post_modularization_fixes.py \
+            tools/repair_post_modularization_patcher.py \
+            .github/workflows/temp-post-modularization-fixes.yml
           git add -A
           git commit -m "fix: resolve post-modularization regressions"
           git push origin HEAD:fix/post-modularization-regressions
