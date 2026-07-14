@@ -35,6 +35,8 @@ jobs:
             tools/apply_post_modularization_fixes.py
           python tools/repair_post_modularization_patcher.py
           python -m py_compile tools/apply_post_modularization_fixes.py
+          python tools/repair_post_modularization_patcher.py
+          python -m py_compile tools/apply_post_modularization_fixes.py
           python tools/apply_post_modularization_fixes.py
           python -m compileall -q .
       - name: Run full suite on Python 3.9
