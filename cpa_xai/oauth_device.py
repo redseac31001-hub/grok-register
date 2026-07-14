@@ -251,9 +251,9 @@ def poll_device_token(
                     "device_code": str(device_code).strip(),
                     "client_id": client_id,
                 },
-                timeout=timeout,
+                timeout=min(float(timeout), 5.0),
                 proxy=proxy,
-                retries=2,
+                retries=0,
                 retry_sleep=1.0,
             )
             net_streak = 0

@@ -36,6 +36,7 @@ import socket
 import socketserver
 import ssl
 import urllib.parse
+import tempfile
 
 os.environ.setdefault("TK_SILENCE_DEPRECATION", "1")
 
@@ -104,6 +105,10 @@ class AccountRetryNeeded(Exception):
     pass
 
 
+class ConfigError(RuntimeError):
+    pass
+
+
 def load_config():
     global config
     if os.path.exists(CONFIG_FILE):
@@ -114,20 +119,48 @@ def load_config():
                 raise ValueError("config root must be a JSON object")
             config = {**DEFAULT_CONFIG, **loaded}
         except Exception as exc:
-            message = f"配置文件解析失败: {CONFIG_FILE}: {exc}"
-            print(f"[!] {message}", file=sys.stderr)
-            raise SystemExit(message)
+            raise ConfigError(f"配置文件解析失败: {CONFIG_FILE}: {exc}") from exc
     else:
         config = DEFAULT_CONFIG.copy()
     return config
 
 
 def save_config():
+    config_dir = os.path.dirname(os.path.abspath(CONFIG_FILE))
+    os.makedirs(config_dir, exist_ok=True)
+    fd = None
+    temp_path = None
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        fd, temp_path = tempfile.mkstemp(prefix=".config-", suffix=".json.tmp", dir=config_dir)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            fd = None
             json.dump(config, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"保存配置失败: {e}")
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(temp_path, 0o600)
+        except Exception:
+            pass
+        os.replace(temp_path, CONFIG_FILE)
+        temp_path = None
+        try:
+            os.chmod(CONFIG_FILE, 0o600)
+        except Exception:
+            pass
+    except Exception as exc:
+        raise ConfigError(f"保存配置失败: {exc}") from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except Exception:
+                pass
 
 
 def ensure_stable_python_runtime():
@@ -669,6 +702,12 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
     os.makedirs(parent, exist_ok=True)
     lock_path = token_file + ".lock"
     try:
+        with open(lock_path, "a", encoding="utf-8"):
+            pass
+        os.chmod(lock_path, 0o600)
+    except Exception:
+        pass
+    try:
         from filelock import FileLock
     except Exception as exc:
         raise RuntimeError(f"filelock 依赖不可用，拒绝非原子写入 token 池: {exc}")
@@ -688,8 +727,10 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
         if not isinstance(data, dict):
             raise RuntimeError("本地 token 文件根节点不是 JSON object，拒绝覆盖")
         pool = data.get(pool_name)
-        if not isinstance(pool, list):
+        if pool is None:
             pool = []
+        elif not isinstance(pool, list):
+            raise RuntimeError(f"本地 token 池 {pool_name} 不是列表，拒绝覆盖")
         existing = set()
         for item in pool:
             if isinstance(item, str):
@@ -709,18 +750,31 @@ def add_token_to_grok2api_local_pool(raw_token, email="", log_callback=None):
                     dst.write(src.read())
                     dst.flush()
                     os.fsync(dst.fileno())
+                try:
+                    os.chmod(backup_path, 0o600)
+                except Exception:
+                    pass
             except Exception as exc:
                 raise RuntimeError(f"创建本地 token 备份失败，拒绝继续写入: {exc}")
-        temp_path = token_file + ".tmp"
+        fd, temp_path = tempfile.mkstemp(prefix=".token-", suffix=".tmp", dir=parent)
         try:
-            with open(temp_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())
+            try:
+                os.chmod(temp_path, 0o600)
+            except Exception:
+                pass
             os.replace(temp_path, token_file)
+            temp_path = None
+            try:
+                os.chmod(token_file, 0o600)
+            except Exception:
+                pass
         finally:
-            if os.path.exists(temp_path):
+            if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
                 except Exception:
@@ -822,8 +876,10 @@ def add_token_to_grok2api_remote_pool(raw_token, email="", log_callback=None):
     if not loaded_remote_state:
         raise RuntimeError("无法安全读取远端 token 池，拒绝执行全量覆盖: " + "; ".join(load_errors))
     pool = current.get(pool_name)
-    if not isinstance(pool, list):
+    if pool is None:
         pool = []
+    elif not isinstance(pool, list):
+        raise RuntimeError(f"远端 token 池 {pool_name} 不是列表，拒绝全量覆盖")
     existing = set()
     for item in pool:
         if isinstance(item, str):
@@ -1978,6 +2034,12 @@ def cleanup_runtime_memory(log_callback=None, reason="定期清理"):
     if log_callback:
         log_callback(f"[*] {reason}: 关闭浏览器并清理内存")
     stop_browser()
+    try:
+        from cpa_xai.browser_confirm import shutdown_mint_browsers
+        shutdown_mint_browsers()
+    except Exception as exc:
+        if log_callback:
+            log_callback(f"[Debug] CPA 浏览器清理失败: {exc}")
     collected = gc.collect()
     if log_callback:
         log_callback(f"[*] Python GC 已回收对象数: {collected}")
@@ -3071,6 +3133,7 @@ class GrokRegisterGUI:
         self.results = []
         self.stop_requested = False
         self.ui_queue = queue.Queue()
+        self._ui_thread_id = threading.get_ident()
         self.accounts_output_file = ""
         self.setup_ui()
 
@@ -3288,25 +3351,40 @@ class GrokRegisterGUI:
         self.log("[*] GUI 已就绪，配置已加载")
         self.log(f"[*] 当前邮箱服务商: {self.email_provider_var.get()} | 注册数量: {self.count_var.get()}")
 
+    def _call_ui(self, func, *args):
+        if threading.get_ident() == self._ui_thread_id:
+            func(*args)
+            return
+        try:
+            self.root.after(0, lambda: func(*args))
+        except Exception:
+            pass
+
+    def _append_log_line(self, line):
+        self.log_text.insert(tk.END, f"{line}\n")
+        self.log_text.see(tk.END)
+
     def log(self, message):
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         line = f"[{timestamp}] {message}"
         print(line, flush=True)
-        self.log_text.insert(tk.END, f"{line}\n")
-        self.log_text.see(tk.END)
+        self._call_ui(self._append_log_line, line)
 
     def clear_log(self):
-        self.log_text.delete(1.0, tk.END)
+        self._call_ui(lambda: self.log_text.delete(1.0, tk.END))
 
     def update_stats(self):
-        self.stats_var.set(f"成功: {self.success_count} | 失败: {self.fail_count}")
+        self._call_ui(lambda: self.stats_var.set(f"成功: {self.success_count} | 失败: {self.fail_count}"))
 
     def _set_running_ui(self, running):
         self.is_running = running
-        self.start_btn.config(state=tk.DISABLED if running else tk.NORMAL)
-        self.stop_btn.config(state=tk.NORMAL if running else tk.DISABLED)
-        self.status_var.set("运行中..." if running else "就绪")
-        self.status_label.config(foreground="blue" if running else "green")
+        def apply():
+            self.start_btn.config(state=tk.DISABLED if running else tk.NORMAL)
+            self.stop_btn.config(state=tk.NORMAL if running else tk.DISABLED)
+            self.status_var.set("运行中..." if running else "就绪")
+            self.status_label.config(foreground="blue" if running else "green")
+        self._call_ui(apply)
+
 
     def should_stop(self):
         return self.stop_requested or not self.is_running
@@ -3340,7 +3418,11 @@ class GrokRegisterGUI:
             config["cloudflare_path_accounts"] = raw_paths[1] if raw_paths[1].startswith("/") else ("/" + raw_paths[1])
             config["cloudflare_path_token"] = raw_paths[2] if raw_paths[2].startswith("/") else ("/" + raw_paths[2])
             config["cloudflare_path_messages"] = raw_paths[3] if raw_paths[3].startswith("/") else ("/" + raw_paths[3])
-        save_config()
+        try:
+            save_config()
+        except ConfigError as exc:
+            self.log(f"[!] 配置保存失败: {exc}")
+            return
         if config["email_provider"] == "cloudflare" and not config["cloudflare_api_base"]:
             self.log("[!] Cloudflare 模式需要先填写 Cloudflare API Base")
             return
@@ -3361,7 +3443,11 @@ class GrokRegisterGUI:
             self.log("[!] 注册数量无效")
             return
         config["register_count"] = count
-        save_config()
+        try:
+            save_config()
+        except ConfigError as exc:
+            self.log(f"[!] 配置保存失败: {exc}")
+            return
         self.stop_requested = False
         self.success_count = 0
         self.fail_count = 0
@@ -3522,7 +3608,7 @@ class GrokRegisterGUI:
         except Exception as exc:
             self.log(f"[!] 任务异常: {exc}")
         finally:
-            stop_browser()
+            cleanup_runtime_memory(log_callback=self.log, reason="任务结束")
             self._set_running_ui(False)
             self.log("[*] 任务结束")
 
@@ -3691,7 +3777,11 @@ def run_registration_cli(count):
 
 
 def main_cli():
-    load_config()
+    try:
+        load_config()
+    except ConfigError as exc:
+        cli_log(f"[!] {exc}")
+        return
     count = int(config.get("register_count", 1) or 1)
     cli_log("[*] CLI 已加载配置")
     cli_log(f"[*] 当前邮箱服务商: {config.get('email_provider', 'duckmail')} | 注册数量: {count}")
@@ -3717,7 +3807,16 @@ def main():
         return
     root = tk.Tk()
     setup_light_theme(root)
-    app = GrokRegisterGUI(root)
+    try:
+        app = GrokRegisterGUI(root)
+    except ConfigError as exc:
+        print(f"[!] {exc}", file=sys.stderr)
+        try:
+            messagebox.showerror("配置错误", str(exc))
+        except Exception:
+            pass
+        root.destroy()
+        return
     root.mainloop()
 
 

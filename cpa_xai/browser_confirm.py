@@ -194,22 +194,30 @@ def create_standalone_page(proxy: Optional[str] = None, headless: bool = False, 
     resolved = resolve_proxy(proxy)
     proxy_bridge = None
     chrome_proxy, proxy_bridge = prepare_chromium_proxy(resolved, log=logger)
-    if chrome_proxy:
-        options.set_argument("--proxy-server=%s" % chrome_proxy)
-        logger("browser proxy=%s (chromium %s)" % (proxy_log_label(resolved), chrome_proxy))
-    else:
-        logger("browser proxy=(none)")
+    try:
+        if chrome_proxy:
+            options.set_argument("--proxy-server=%s" % chrome_proxy)
+            logger("browser proxy=%s (chromium %s)" % (proxy_log_label(resolved), chrome_proxy))
+        else:
+            logger("browser proxy=(none)")
 
-    browser = Chromium(options)
-    if proxy_bridge is not None:
-        try:
-            setattr(browser, "_cpa_proxy_bridge", proxy_bridge)
-        except Exception:
-            pass
-    _register_mint_browser(browser)
-    page = browser.latest_tab
-    logger("standalone chromium started")
-    return browser, page
+        browser = Chromium(options)
+        if proxy_bridge is not None:
+            try:
+                setattr(browser, "_cpa_proxy_bridge", proxy_bridge)
+            except Exception:
+                pass
+        _register_mint_browser(browser)
+        page = browser.latest_tab
+        logger("standalone chromium started")
+        return browser, page
+    except Exception:
+        if proxy_bridge is not None:
+            try:
+                proxy_bridge.stop()
+            except Exception:
+                pass
+        raise
 
 
 def close_standalone(browser: Any) -> None:
