@@ -39,7 +39,7 @@ class CpaExportSettings:
         if hotload_dir is not None and not hotload_dir.is_absolute():
             hotload_dir = (_ROOT / hotload_dir).resolve()
         return cls(
-            enabled=bool(cfg.get("cpa_export_enabled", False)),
+            enabled=bool(cfg.get("cpa_export_enabled", True)),
             auth_dir=auth_dir,
             hotload_dir=hotload_dir,
             copy_to_hotload=bool(cfg.get("cpa_copy_to_hotload", False)),
